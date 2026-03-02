@@ -1,75 +1,190 @@
-function filterVideos() {
+if (!chrome.runtime || !chrome.runtime.id) {
+    console.warn("Extension context invalidated");
+}
 
-  try {
+const topicMap = {
+    politics: [
+        "election","government","pm","president",
+        "assembly","parliament","senate",
+        "policy","minister","national"
+    ],
 
-    chrome.storage.sync.get(["keywords", "mode"], function(result) {
+    sports: [
+        "match","football","cricket","goal",
+        "tournament","league","world cup"
+    ],
 
-      let keywords = result.keywords || [];
-      let mode = result.mode || "block";
+    entertainment: [
+        "movie","trailer","celebrity",
+        "drama","film","song","music"
+    ],
 
-     let videos = document.querySelectorAll(
-  "ytd-video-renderer, " +
-  "ytd-grid-video-renderer, " +
-  "ytd-rich-item-renderer, " +
-  "ytd-compact-video-renderer, " +
-  "ytd-reel-item-renderer, " +
-  "ytd-reel-video-renderer, " +
-  "ytd-rich-grid-media"
-);
+    tech: [
+        "ai","machine learning","nvidia",
+        "iphone","android","gpu","coding"
+    ]
+};
 
-      videos.forEach(video => {
+function cleanText(text){
+    return text
+        .toLowerCase()
+        .replace(/[^\w\s]/g,"")
+        .trim();
+}
 
-        video.style.display = "";
-        video.style.border = "";
+function detectTopic(text, blockedTopics){
 
-        let titleEl =
-          video.querySelector("#video-title") ||
-          video.querySelector("h3") ||
-          video.querySelector("a#video-title");
+    const cleaned = cleanText(text);
 
-        let titleText = titleEl ? titleEl.innerText.toLowerCase() : "";
+    for(let topic of blockedTopics){
 
-        let channelEl =
-          video.querySelector("#channel-name") ||
-          video.querySelector("ytd-channel-name");
+        if(topicMap[topic]){
 
-        let channelText = channelEl ? channelEl.innerText.toLowerCase() : "";
+            for(let word of topicMap[topic]){
+                if(cleaned.includes(word)){
+                    return true;
+                }
+            }
 
-        let combinedText = titleText + " " + channelText;
-
-        let matched = keywords.some(word =>
-          combinedText.includes(word)
-        );
-
-        if (matched) {
-          if (mode === "block") {
-            video.style.display = "none";
-          } else {
-            video.style.border = "3px solid yellow";
-          }
         }
 
-      });
+    }
 
+    return false;
+}
+
+function getSentimentScore(text){
+
+    const negativeLexicon = [
+        "shocking","exposed","fake","scam",
+        "hate","worst","terrible","angry",
+        "drama","controversy","insane",
+        "crying","gone wrong","disaster",
+        "lies","clickbait","must watch",
+        "truth revealed","you wont believe"
+    ];
+
+    let score = 0;
+    let lowerText = text.toLowerCase();
+
+    negativeLexicon.forEach(word=>{
+        if(lowerText.includes(word)){
+            score++;
+        }
     });
 
-  } catch (error) {
-    console.log("Extension error:", error);
-  }
+    if(text === text.toUpperCase() && text.length > 15){
+        score++;
+    }
+
+    if((text.match(/!/g)||[]).length >= 2){
+        score++;
+    }
+
+    return score;
+}
+
+function filterVideos(){
+
+    chrome.storage.sync.get(
+        ["keywords","topics","mode"],
+        function(result){
+
+            let keywords = (result.keywords || []).map(k=>k.toLowerCase());
+            let blockedTopics = (result.topics || []).map(t=>t.toLowerCase());
+            let mode = result.mode || "block";
+
+            const cards = document.querySelectorAll(
+                "ytd-video-renderer,"+
+                "ytd-grid-video-renderer,"+
+                "ytd-rich-item-renderer,"+
+                "ytd-compact-video-renderer,"+
+                "ytd-reel-item-renderer,"+
+                "ytd-reel-video-renderer"
+            );
+
+            cards.forEach(card=>{
+
+                if(card.dataset.filtered === "true") return;
+                card.dataset.filtered = "true";
+
+                let rawText = card.innerText || "";
+                let text = rawText.toLowerCase();
+
+                card.style.display = "";
+                card.style.border = "";
+
+                let keywordMatch =
+                    keywords.some(word=>text.includes(word));
+
+                let topicMatch =
+                    detectTopic(text, blockedTopics);
+
+                let sentimentScore =
+                    getSentimentScore(text);
+
+                let hide = false;
+                let highlight = false;
+
+                // Block Mode
+                if(mode === "block"){
+                    if(keywordMatch || topicMatch){
+                        hide = true;
+                    }
+                }
+
+                // Highlight Mode
+                else if(mode === "highlight"){
+                    if(keywordMatch || topicMatch){
+                        highlight = true;
+                    }
+                }
+
+                // Whitelist Mode
+                else if(mode === "whitelist"){
+                    if(!(keywordMatch || topicMatch)){
+                        hide = true;
+                    }
+                }
+
+                // Sentiment Mode
+                else if(mode === "sentiment"){
+                    if(sentimentScore >= 2){
+                        hide = true;
+                    }
+                }
+
+                if(hide){
+                    card.style.display = "none";
+                }
+
+                if(highlight){
+                    card.style.border = "3px solid yellow";
+                    card.style.borderRadius = "12px";
+                }
+
+            });
+
+        }
+    );
+
+}
+
+function startObserver(){
+
+    const observer = new MutationObserver(()=>{
+        filterVideos();
+    });
+
+    observer.observe(document.body,{
+        childList:true,
+        subtree:true
+    });
 
 }
 
 filterVideos();
 
-const observer = new MutationObserver(() => {
+startObserver();
 
-  requestAnimationFrame(() => {
-    filterVideos();
-  });
-
-});
-
-observer.observe(document.body, {
-  childList: true,
-  subtree: true
-});
+setInterval(filterVideos,1500);
